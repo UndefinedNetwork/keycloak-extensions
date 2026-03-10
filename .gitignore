@@ -1,0 +1,16 @@
+# Maven build output
+target/
+*.jar
+!providers/.gitkeep
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.project
+.classpath
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db

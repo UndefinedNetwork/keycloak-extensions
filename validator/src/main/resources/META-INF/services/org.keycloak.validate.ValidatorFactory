@@ -1,0 +1,2 @@
+network.undefined.keycloak.validator.UniqueAttributeValidatorFactory
+network.undefined.keycloak.validator.SyncTargetValidatorFactory
