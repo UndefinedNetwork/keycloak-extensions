@@ -23,14 +23,14 @@ jobs:
         run: mvn -B verify
 
       - name: Publish to GitHub Packages
-        run: mvn -B deploy -DskipTests
+        run: mvn -B deploy -DskipTests -pl validator
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate checksums
         run: |
           cd validator/target
-          sha256sum keycloak-extensions-spi-*.jar > checksums-sha256.txt
+          sha256sum validators-*.jar > checksums-sha256.txt
 
       - name: Create GitHub Release
         env:
@@ -39,5 +39,5 @@ jobs:
         run: |
           gh release create "$TAG" \
             --generate-notes \
-            validator/target/keycloak-extensions-spi-*.jar \
+            validator/target/validators-*.jar \
             validator/target/checksums-sha256.txt
