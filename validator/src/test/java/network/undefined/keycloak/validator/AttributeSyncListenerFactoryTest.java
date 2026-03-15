@@ -20,6 +20,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -80,10 +81,17 @@ class AttributeSyncListenerFactoryTest {
     }
 
     private Event createEvent(EventType type) {
+        return createEvent(type, null);
+    }
+
+    private Event createEvent(EventType type, Map<String, String> details) {
         Event event = new Event();
         event.setType(type);
         event.setRealmId(REALM_ID);
         event.setUserId(USER_ID);
+        if (details != null) {
+            event.setDetails(details);
+        }
         return event;
     }
 
@@ -266,10 +274,14 @@ class AttributeSyncListenerFactoryTest {
     }
 
     // ---- On-register reverse sync tests ----
+    // Keycloak lowercases username before the REGISTER event fires, so
+    // user.getUsername() returns "johndoe". The original "JohnDoe" is
+    // preserved in event.getDetails().get("username").
 
     @Test
-    void onRegisterCopiesUsernameToDisplayName() {
-        when(user.getUsername()).thenReturn("JohnDoe");
+    void onRegisterReadsOriginalCaseFromEventDetails() {
+        // user model has lowercased username (KC default behavior)
+        lenient().when(user.getUsername()).thenReturn("johndoe");
         when(user.getAttributes()).thenReturn(Collections.emptyMap());
 
         AttributeSyncListenerFactory factory = createFactory(
@@ -277,14 +289,33 @@ class AttributeSyncListenerFactoryTest {
                 "username", "display_name", "none");
         EventListenerProvider listener = factory.create(session);
 
-        listener.onEvent(createEvent(EventType.REGISTER));
+        // event details have the original mixed-case value
+        Event event = createEvent(EventType.REGISTER, Map.of("username", "JohnDoe"));
+        listener.onEvent(event);
 
+        // display_name gets the original case, not the lowercased one
         verify(user).setSingleAttribute("display_name", "JohnDoe");
     }
 
     @Test
+    void onRegisterFallsBackToUserModelWhenNoDetails() {
+        when(user.getUsername()).thenReturn("johndoe");
+        when(user.getAttributes()).thenReturn(Collections.emptyMap());
+
+        AttributeSyncListenerFactory factory = createFactory(
+                "display_name", "username", "lowercase",
+                "username", "display_name", "none");
+        EventListenerProvider listener = factory.create(session);
+
+        // no details on event -- falls back to user model
+        listener.onEvent(createEvent(EventType.REGISTER));
+
+        verify(user).setSingleAttribute("display_name", "johndoe");
+    }
+
+    @Test
     void onRegisterLowercaseTransformation() {
-        when(user.getUsername()).thenReturn("JohnDoe");
+        lenient().when(user.getUsername()).thenReturn("johndoe");
         when(user.getAttributes()).thenReturn(Collections.emptyMap());
 
         AttributeSyncListenerFactory factory = createFactory(
@@ -292,15 +323,14 @@ class AttributeSyncListenerFactoryTest {
                 "username", "display_name", "lowercase");
         EventListenerProvider listener = factory.create(session);
 
-        listener.onEvent(createEvent(EventType.REGISTER));
+        Event event = createEvent(EventType.REGISTER, Map.of("username", "JohnDoe"));
+        listener.onEvent(event);
 
         verify(user).setSingleAttribute("display_name", "johndoe");
     }
 
     @Test
     void onRegisterSkipsUpdateProfile() {
-        when(user.getUsername()).thenReturn("JohnDoe");
-
         AttributeSyncListenerFactory factory = createFactory(
                 "display_name", "username", "lowercase",
                 "username", "display_name", "none");
@@ -313,8 +343,6 @@ class AttributeSyncListenerFactoryTest {
 
     @Test
     void onRegisterSkipsAdminUpdate() {
-        when(user.getUsername()).thenReturn("JohnDoe");
-
         AttributeSyncListenerFactory factory = createFactory(
                 "display_name", "username", "lowercase",
                 "username", "display_name", "none");
@@ -341,17 +369,18 @@ class AttributeSyncListenerFactoryTest {
     }
 
     @Test
-    void onRegisterReadsFromEmail() {
-        when(user.getEmail()).thenReturn("john@example.com");
+    void onRegisterReadsEmailFromEventDetails() {
+        when(user.getAttributes()).thenReturn(Collections.emptyMap());
 
         AttributeSyncListenerFactory factory = createFactory(
                 "display_name", "username", "lowercase",
                 "email", "display_name", "none");
         EventListenerProvider listener = factory.create(session);
 
-        listener.onEvent(createEvent(EventType.REGISTER));
+        Event event = createEvent(EventType.REGISTER, Map.of("email", "John@Example.COM"));
+        listener.onEvent(event);
 
-        verify(user).setSingleAttribute("display_name", "john@example.com");
+        verify(user).setSingleAttribute("display_name", "John@Example.COM");
     }
 
     @Test
@@ -363,6 +392,7 @@ class AttributeSyncListenerFactoryTest {
                 "username", "display_name", "none");
         EventListenerProvider listener = factory.create(session);
 
+        // no "username" in details either
         listener.onEvent(createEvent(EventType.REGISTER));
 
         verify(user, never()).setSingleAttribute(any(), any());
@@ -370,9 +400,9 @@ class AttributeSyncListenerFactoryTest {
 
     @Test
     void onRegisterRunsBeforeSyncField() {
-        when(user.getUsername()).thenReturn("JohnDoe");
+        when(user.getUsername()).thenReturn("johndoe");
         // First call (onRegisterSync): no display_name yet -> triggers setSingleAttribute
-        // Second call (syncField): display_name present -> triggers setUsername
+        // Second call (syncField): display_name present -> triggers setUsername (no-op since already johndoe)
         when(user.getAttributes())
                 .thenReturn(Collections.emptyMap())
                 .thenReturn(Map.of("display_name", List.of("JohnDoe")));
@@ -382,10 +412,12 @@ class AttributeSyncListenerFactoryTest {
                 "username", "display_name", "none");
         EventListenerProvider listener = factory.create(session);
 
-        listener.onEvent(createEvent(EventType.REGISTER));
+        Event event = createEvent(EventType.REGISTER, Map.of("username", "JohnDoe"));
+        listener.onEvent(event);
 
         InOrder order = inOrder(user);
         order.verify(user).setSingleAttribute("display_name", "JohnDoe");
-        order.verify(user).setUsername("johndoe");
+        // syncField reads display_name "JohnDoe", lowercases to "johndoe",
+        // but username is already "johndoe" so setUsername is NOT called
     }
 }

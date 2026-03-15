@@ -14,6 +14,7 @@ import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
 
 import java.util.List;
+import java.util.Map;
 
 public class AttributeSyncListenerFactory implements EventListenerProviderFactory {
 
@@ -86,7 +87,7 @@ public class AttributeSyncListenerFactory implements EventListenerProviderFactor
         @Override
         public void onEvent(Event event) {
             if (event.getType() == EventType.REGISTER) {
-                onRegisterSync(event.getRealmId(), event.getUserId());
+                onRegisterSync(event.getRealmId(), event.getUserId(), event.getDetails());
                 syncField(event.getRealmId(), event.getUserId());
             } else if (event.getType() == EventType.UPDATE_PROFILE) {
                 syncField(event.getRealmId(), event.getUserId());
@@ -122,7 +123,12 @@ public class AttributeSyncListenerFactory implements EventListenerProviderFactor
             }
         }
 
-        private void onRegisterSync(String realmId, String userId) {
+        /**
+         * Reads the source value from event details first (preserves original case
+         * for built-in fields like username that Keycloak normalizes before the
+         * event fires), falling back to the user model.
+         */
+        private void onRegisterSync(String realmId, String userId, Map<String, String> eventDetails) {
             if (onRegisterSourceField == null || onRegisterTargetAttribute == null) return;
 
             RealmModel realm = session.realms().getRealm(realmId);
@@ -131,7 +137,15 @@ public class AttributeSyncListenerFactory implements EventListenerProviderFactor
             UserModel user = session.users().getUserById(realm, userId);
             if (user == null) return;
 
-            String sourceValue = readBuiltInField(user, onRegisterSourceField);
+            // Event details contain the raw form values (pre-normalization),
+            // so prefer them over user model fields which KC may have lowercased.
+            String sourceValue = null;
+            if (eventDetails != null) {
+                sourceValue = eventDetails.get(onRegisterSourceField);
+            }
+            if (sourceValue == null) {
+                sourceValue = readBuiltInField(user, onRegisterSourceField);
+            }
             if (sourceValue == null) return;
 
             String desired = "lowercase".equals(onRegisterTransformation)
