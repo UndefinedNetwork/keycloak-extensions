@@ -7,7 +7,7 @@
 
     <groupId>network.undefined.keycloak</groupId>
     <artifactId>keycloak-extensions-parent</artifactId>
-    <version>0.1.2</version>
+    <version>0.2.0</version>
     <packaging>pom</packaging>
 
     <licenses>

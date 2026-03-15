@@ -15,6 +15,7 @@ import org.keycloak.models.RealmModel;
 import org.keycloak.models.RealmProvider;
 import org.keycloak.models.UserModel;
 import org.keycloak.models.UserProvider;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -24,6 +25,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -60,11 +62,19 @@ class AttributeSyncListenerFactoryTest {
     }
 
     private AttributeSyncListenerFactory createFactory(String sourceAttr, String targetField, String transformation) {
+        return createFactory(sourceAttr, targetField, transformation, null, null, "none");
+    }
+
+    private AttributeSyncListenerFactory createFactory(String sourceAttr, String targetField, String transformation,
+                                                        String onRegSourceField, String onRegTargetAttr, String onRegTransformation) {
         AttributeSyncListenerFactory factory = new AttributeSyncListenerFactory();
         Config.Scope scope = org.mockito.Mockito.mock(Config.Scope.class);
         when(scope.get("sourceAttribute", "display_name")).thenReturn(sourceAttr);
         when(scope.get("targetField", "username")).thenReturn(targetField);
         when(scope.get("transformation", "lowercase")).thenReturn(transformation);
+        when(scope.get("onRegisterSourceField")).thenReturn(onRegSourceField);
+        when(scope.get("onRegisterTargetAttribute")).thenReturn(onRegTargetAttr);
+        when(scope.get("onRegisterTransformation", "none")).thenReturn(onRegTransformation);
         factory.init(scope);
         return factory;
     }
@@ -85,6 +95,8 @@ class AttributeSyncListenerFactoryTest {
         adminEvent.setResourcePath(resourcePath);
         return adminEvent;
     }
+
+    // ---- Existing sync tests ----
 
     @Test
     void syncUsernameOnRegister() {
@@ -251,5 +263,129 @@ class AttributeSyncListenerFactoryTest {
     void providerIdAndDefaults() {
         AttributeSyncListenerFactory factory = new AttributeSyncListenerFactory();
         assertEquals("attribute-sync", factory.getId());
+    }
+
+    // ---- On-register reverse sync tests ----
+
+    @Test
+    void onRegisterCopiesUsernameToDisplayName() {
+        when(user.getUsername()).thenReturn("JohnDoe");
+        when(user.getAttributes()).thenReturn(Collections.emptyMap());
+
+        AttributeSyncListenerFactory factory = createFactory(
+                "display_name", "username", "lowercase",
+                "username", "display_name", "none");
+        EventListenerProvider listener = factory.create(session);
+
+        listener.onEvent(createEvent(EventType.REGISTER));
+
+        verify(user).setSingleAttribute("display_name", "JohnDoe");
+    }
+
+    @Test
+    void onRegisterLowercaseTransformation() {
+        when(user.getUsername()).thenReturn("JohnDoe");
+        when(user.getAttributes()).thenReturn(Collections.emptyMap());
+
+        AttributeSyncListenerFactory factory = createFactory(
+                "display_name", "username", "lowercase",
+                "username", "display_name", "lowercase");
+        EventListenerProvider listener = factory.create(session);
+
+        listener.onEvent(createEvent(EventType.REGISTER));
+
+        verify(user).setSingleAttribute("display_name", "johndoe");
+    }
+
+    @Test
+    void onRegisterSkipsUpdateProfile() {
+        when(user.getUsername()).thenReturn("JohnDoe");
+
+        AttributeSyncListenerFactory factory = createFactory(
+                "display_name", "username", "lowercase",
+                "username", "display_name", "none");
+        EventListenerProvider listener = factory.create(session);
+
+        listener.onEvent(createEvent(EventType.UPDATE_PROFILE));
+
+        verify(user, never()).setSingleAttribute(any(), any());
+    }
+
+    @Test
+    void onRegisterSkipsAdminUpdate() {
+        when(user.getUsername()).thenReturn("JohnDoe");
+
+        AttributeSyncListenerFactory factory = createFactory(
+                "display_name", "username", "lowercase",
+                "username", "display_name", "none");
+        EventListenerProvider listener = factory.create(session);
+
+        AdminEvent adminEvent = createAdminEvent(ResourceType.USER, OperationType.UPDATE, "users/" + USER_ID);
+        listener.onEvent(adminEvent, false);
+
+        verify(user, never()).setSingleAttribute(any(), any());
+    }
+
+    @Test
+    void onRegisterDisabledWhenUnconfigured() {
+        AttributeSyncListenerFactory factory = createFactory(
+                "display_name", "username", "lowercase",
+                null, null, "none");
+        EventListenerProvider listener = factory.create(session);
+
+        listener.onEvent(createEvent(EventType.REGISTER));
+
+        // syncField runs but onRegisterSync is a no-op
+        verify(user).setUsername("testvalue");
+        verify(user, never()).setSingleAttribute(any(), any());
+    }
+
+    @Test
+    void onRegisterReadsFromEmail() {
+        when(user.getEmail()).thenReturn("john@example.com");
+
+        AttributeSyncListenerFactory factory = createFactory(
+                "display_name", "username", "lowercase",
+                "email", "display_name", "none");
+        EventListenerProvider listener = factory.create(session);
+
+        listener.onEvent(createEvent(EventType.REGISTER));
+
+        verify(user).setSingleAttribute("display_name", "john@example.com");
+    }
+
+    @Test
+    void onRegisterSkipsNullSource() {
+        when(user.getUsername()).thenReturn(null);
+
+        AttributeSyncListenerFactory factory = createFactory(
+                "display_name", "username", "lowercase",
+                "username", "display_name", "none");
+        EventListenerProvider listener = factory.create(session);
+
+        listener.onEvent(createEvent(EventType.REGISTER));
+
+        verify(user, never()).setSingleAttribute(any(), any());
+    }
+
+    @Test
+    void onRegisterRunsBeforeSyncField() {
+        when(user.getUsername()).thenReturn("JohnDoe");
+        // First call (onRegisterSync): no display_name yet -> triggers setSingleAttribute
+        // Second call (syncField): display_name present -> triggers setUsername
+        when(user.getAttributes())
+                .thenReturn(Collections.emptyMap())
+                .thenReturn(Map.of("display_name", List.of("JohnDoe")));
+
+        AttributeSyncListenerFactory factory = createFactory(
+                "display_name", "username", "lowercase",
+                "username", "display_name", "none");
+        EventListenerProvider listener = factory.create(session);
+
+        listener.onEvent(createEvent(EventType.REGISTER));
+
+        InOrder order = inOrder(user);
+        order.verify(user).setSingleAttribute("display_name", "JohnDoe");
+        order.verify(user).setUsername("johndoe");
     }
 }

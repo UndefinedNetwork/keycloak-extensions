@@ -27,9 +27,14 @@ public class AttributeSyncListenerFactory implements EventListenerProviderFactor
     private String targetField;
     private String transformation;
 
+    private String onRegisterSourceField;
+    private String onRegisterTargetAttribute;
+    private String onRegisterTransformation;
+
     @Override
     public EventListenerProvider create(KeycloakSession session) {
-        return new AttributeSyncListener(session, sourceAttribute, targetField, transformation);
+        return new AttributeSyncListener(session, sourceAttribute, targetField, transformation,
+                onRegisterSourceField, onRegisterTargetAttribute, onRegisterTransformation);
     }
 
     @Override
@@ -37,6 +42,9 @@ public class AttributeSyncListenerFactory implements EventListenerProviderFactor
         sourceAttribute = config.get("sourceAttribute", DEFAULT_SOURCE_ATTRIBUTE);
         targetField = config.get("targetField", DEFAULT_TARGET_FIELD);
         transformation = config.get("transformation", DEFAULT_TRANSFORMATION);
+        onRegisterSourceField = config.get("onRegisterSourceField");
+        onRegisterTargetAttribute = config.get("onRegisterTargetAttribute");
+        onRegisterTransformation = config.get("onRegisterTransformation", "none");
     }
 
     @Override
@@ -58,19 +66,29 @@ public class AttributeSyncListenerFactory implements EventListenerProviderFactor
         private final String sourceAttribute;
         private final String targetField;
         private final String transformation;
+        private final String onRegisterSourceField;
+        private final String onRegisterTargetAttribute;
+        private final String onRegisterTransformation;
 
         AttributeSyncListener(KeycloakSession session, String sourceAttribute,
-                              String targetField, String transformation) {
+                              String targetField, String transformation,
+                              String onRegisterSourceField, String onRegisterTargetAttribute,
+                              String onRegisterTransformation) {
             this.session = session;
             this.sourceAttribute = sourceAttribute;
             this.targetField = targetField;
             this.transformation = transformation;
+            this.onRegisterSourceField = onRegisterSourceField;
+            this.onRegisterTargetAttribute = onRegisterTargetAttribute;
+            this.onRegisterTransformation = onRegisterTransformation;
         }
 
         @Override
         public void onEvent(Event event) {
-            if (event.getType() == EventType.REGISTER
-                    || event.getType() == EventType.UPDATE_PROFILE) {
+            if (event.getType() == EventType.REGISTER) {
+                onRegisterSync(event.getRealmId(), event.getUserId());
+                syncField(event.getRealmId(), event.getUserId());
+            } else if (event.getType() == EventType.UPDATE_PROFILE) {
                 syncField(event.getRealmId(), event.getUserId());
             }
         }
@@ -85,6 +103,43 @@ public class AttributeSyncListenerFactory implements EventListenerProviderFactor
                     String userId = path.substring("users/".length());
                     syncField(event.getRealmId(), userId);
                 }
+            }
+        }
+
+        private String readBuiltInField(UserModel user, String fieldName) {
+            switch (fieldName) {
+                case "username":
+                    return user.getUsername();
+                case "email":
+                    return user.getEmail();
+                case "firstName":
+                    return user.getFirstName();
+                case "lastName":
+                    return user.getLastName();
+                default:
+                    List<String> values = user.getAttributes().get(fieldName);
+                    return (values != null && !values.isEmpty()) ? values.get(0) : null;
+            }
+        }
+
+        private void onRegisterSync(String realmId, String userId) {
+            if (onRegisterSourceField == null || onRegisterTargetAttribute == null) return;
+
+            RealmModel realm = session.realms().getRealm(realmId);
+            if (realm == null) return;
+
+            UserModel user = session.users().getUserById(realm, userId);
+            if (user == null) return;
+
+            String sourceValue = readBuiltInField(user, onRegisterSourceField);
+            if (sourceValue == null) return;
+
+            String desired = "lowercase".equals(onRegisterTransformation)
+                    ? sourceValue.toLowerCase() : sourceValue;
+
+            List<String> current = user.getAttributes().get(onRegisterTargetAttribute);
+            if (current == null || current.isEmpty() || !desired.equals(current.get(0))) {
+                user.setSingleAttribute(onRegisterTargetAttribute, desired);
             }
         }
 

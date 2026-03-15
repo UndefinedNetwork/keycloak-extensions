@@ -4,7 +4,7 @@ Keycloak SPI extensions for unique user attribute enforcement. Built for [Keyclo
 
 ## What's Inside
 
-### `unique-attribute` — User Profile Validator
+### `unique-attribute` - User Profile Validator
 
 Generic validator that ensures a user attribute value is unique across all users in the realm. Can be applied to any attribute in the User Profile configuration.
 
@@ -20,13 +20,13 @@ Generic validator that ensures a user attribute value is unique across all users
 
 #### Modes
 
-**Attribute search** (default) — queries users by attribute value using `searchForUserByUserAttributeStream`. Exact match.
+**Attribute search** (default) - queries users by attribute value using `searchForUserByUserAttributeStream`. Exact match.
 
-**Username lookup** (`lookup-by-username: true`) — looks up `value.toLowerCase()` as a username. Enables case-insensitive uniqueness when paired with an event listener that syncs the attribute to username (e.g. `attribute-sync`).
+**Username lookup** (`lookup-by-username: true`) - looks up `value.toLowerCase()` as a username. Enables case-insensitive uniqueness when paired with an event listener that syncs the attribute to username (e.g. `attribute-sync`).
 
-### `attribute-sync` — Event Listener
+### `attribute-sync` - Event Listener
 
-Syncs a source user attribute to a target field (with optional transformation) whenever a user registers, updates their profile, or is updated by an admin.
+Syncs a source user attribute to a target field (with optional transformation) whenever a user registers, updates their profile, or is updated by an admin. Optionally performs a reverse sync on registration only (e.g. copying the username to a display name attribute before the main sync runs).
 
 - Provider ID: `attribute-sync`
 - Triggers on: `REGISTER`, `UPDATE_PROFILE` user events and `UPDATE` admin events on `USER` resources
@@ -36,13 +36,43 @@ Syncs a source user attribute to a target field (with optional transformation) w
 
 Set via Keycloak SPI config (e.g. environment variables or CLI options):
 
+**Main sync** (runs on REGISTER, UPDATE_PROFILE, and admin UPDATE):
+
 | Option | Default | Description |
 |--------|---------|-------------|
 | `sourceAttribute` | `display_name` | Source user attribute to read from |
 | `targetField` | `username` | Target: `username`, `email`, `firstName`, `lastName`, or attribute name |
-| `transformation` | `lowercase` | `lowercase` or `none` — applied to the source value before writing to target |
+| `transformation` | `lowercase` | `lowercase` or `none` -- applied to the source value before writing to target |
 
-### `sync-target-validator` — User Profile Validator
+**On-register sync** (runs on REGISTER only, before the main sync):
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `onRegisterSourceField` | *(none)* | Source field to read: `username`, `email`, `firstName`, `lastName`, or attribute name. Disabled when null. |
+| `onRegisterTargetAttribute` | *(none)* | Target user attribute to write to. Disabled when null. |
+| `onRegisterTransformation` | `none` | `lowercase` or `none` -- applied to the source value before writing to target |
+
+Both `onRegisterSourceField` and `onRegisterTargetAttribute` must be set for the on-register sync to activate. When disabled (default), only the main sync runs.
+
+#### On-register sync use case
+
+Registration forms often show only a username field. The on-register sync copies the original (mixed-case) username into a display name attribute *before* the main sync lowercases it:
+
+1. User registers with username `JohnDoe`
+2. On-register sync: `username` → `display_name` (no transformation) -- `display_name = "JohnDoe"`
+3. Main sync: `display_name` → `username` (lowercase) -- `username = "johndoe"`
+
+Result: `username = "johndoe"`, `display_name = "JohnDoe"`
+
+Environment variables for this setup:
+
+```bash
+KC_SPI_EVENTS_LISTENER_ATTRIBUTE_SYNC_ON_REGISTER_SOURCE_FIELD=username
+KC_SPI_EVENTS_LISTENER_ATTRIBUTE_SYNC_ON_REGISTER_TARGET_ATTRIBUTE=display_name
+KC_SPI_EVENTS_LISTENER_ATTRIBUTE_SYNC_ON_REGISTER_TRANSFORMATION=none
+```
+
+### `sync-target-validator` - User Profile Validator
 
 Pre-save validator that checks whether syncing a source attribute to a target field would cause a conflict. Mirrors the transformation logic of `attribute-sync` and validates **before** the profile is saved, preventing silent sync failures.
 
@@ -54,7 +84,7 @@ Pre-save validator that checks whether syncing a source attribute to a target fi
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `target-field` | string | `username` | Target field: `username`, `email`, `firstName`, `lastName`, or an attribute name |
-| `transformation` | string | `lowercase` | `lowercase` or `none` — must match sync listener config |
+| `transformation` | string | `lowercase` | `lowercase` or `none` - must match sync listener config |
 | `error-message` | string | `error-sync-target-conflict` | Custom error message key |
 
 #### Target field behavior
@@ -68,7 +98,7 @@ Pre-save validator that checks whether syncing a source attribute to a target fi
 
 ### Bundled Translations
 
-Error message translations are bundled in the JAR via `theme-resources/messages/` and automatically merged into the active theme — no separate theme installation needed.
+Error message translations are bundled in the JAR via `theme-resources/messages/` and automatically merged into the active theme - no separate theme installation needed.
 
 | Key | EN | ES | PL |
 |-----|----|----|----|
@@ -170,21 +200,26 @@ Go to **Realm Settings > Events > Event Listeners** and add `attribute-sync`.
 By default it syncs `display_name` → `username` with `lowercase` transformation. To customize, set environment variables:
 
 ```bash
-# Change source attribute
+# Main sync: change source attribute
 KC_SPI_EVENTS_LISTENER_ATTRIBUTE_SYNC_SOURCE_ATTRIBUTE=my_attr
 
-# Change target field (username, email, firstName, lastName, or any attribute)
+# Main sync: change target field (username, email, firstName, lastName, or any attribute)
 KC_SPI_EVENTS_LISTENER_ATTRIBUTE_SYNC_TARGET_FIELD=email
 
-# Change transformation (lowercase or none)
+# Main sync: change transformation (lowercase or none)
 KC_SPI_EVENTS_LISTENER_ATTRIBUTE_SYNC_TRANSFORMATION=none
+
+# On-register sync (optional): copy username to display_name on registration
+KC_SPI_EVENTS_LISTENER_ATTRIBUTE_SYNC_ON_REGISTER_SOURCE_FIELD=username
+KC_SPI_EVENTS_LISTENER_ATTRIBUTE_SYNC_ON_REGISTER_TARGET_ATTRIBUTE=display_name
+KC_SPI_EVENTS_LISTENER_ATTRIBUTE_SYNC_ON_REGISTER_TRANSFORMATION=none
 ```
 
 ### Step 2: Add validators to the source attribute
 
 Go to **Realm Settings > User Profile**, select the source attribute (e.g. `display_name`), and add validators:
 
-**`sync-target-validator`** — prevents saving if the sync would cause a conflict:
+**`sync-target-validator`** - prevents saving if the sync would cause a conflict:
 
 | Option | Value | Notes |
 |--------|-------|-------|
@@ -192,7 +227,7 @@ Go to **Realm Settings > User Profile**, select the source attribute (e.g. `disp
 | `transformation` | `lowercase` | Must match the listener's `transformation` |
 | `error-message` | `error-sync-target-conflict` | Optional, customize error key |
 
-**`unique-attribute`** — prevents duplicate attribute values:
+**`unique-attribute`** - prevents duplicate attribute values:
 
 | Option | Value | Notes |
 |--------|-------|-------|
@@ -214,7 +249,7 @@ The `sync-target-validator` rejects values that would cause a username collision
 
 #### Unique display name (without sync protection)
 
-Simpler setup — syncs and validates, but won't catch conflicts before save:
+Simpler setup - syncs and validates, but won't catch conflicts before save:
 
 1. Enable `attribute-sync` event listener
 2. On `display_name`, add `unique-attribute` with `lookup-by-username: true`
@@ -226,7 +261,7 @@ For simple exact-match uniqueness on any attribute without syncing:
 1. On the attribute, add `unique-attribute` validator
 2. Optionally set a custom `error-message`
 
-No event listener needed — the validator queries the attribute directly.
+No event listener needed - the validator queries the attribute directly.
 
 ## How It Works
 
@@ -234,16 +269,18 @@ No event listener needed — the validator queries the attribute directly.
 
 ```
 User submits form
-  │
-  ├─ sync-target-validator: Would lowercased value conflict with another username?
-  │   └─ YES → reject with error (before save)
-  │
-  ├─ unique-attribute: Is this attribute value already taken?
-  │   └─ YES → reject with error (before save)
-  │
-  ├─ Profile saved
-  │
-  └─ attribute-sync (event listener): Sync display_name.toLowerCase() → username
+  |
+  +-- sync-target-validator: Would lowercased value conflict with another username?
+  |   +-- YES -> reject with error (before save)
+  |
+  +-- unique-attribute: Is this attribute value already taken?
+  |   +-- YES -> reject with error (before save)
+  |
+  +-- Profile saved
+  |
+  +-- attribute-sync (event listener):
+      +-- [REGISTER only] On-register sync: username -> display_name (if configured)
+      +-- Main sync: display_name.toLowerCase() -> username
 ```
 
 ### Attribute search mode (unique-attribute, default)
